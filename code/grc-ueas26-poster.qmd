@@ -342,6 +342,8 @@ print(field_summary)
 
 ### Statistics + Figures
 
+#### Oyster Cover Change
+
 ```{r}
 {r}
 #| label: fig-themes
@@ -476,6 +478,8 @@ ggsave(
   bg = "white"
 )
 ```
+
+#### Ray Pit Count
 
 ```{r}
 #| label: pit-count-figs
