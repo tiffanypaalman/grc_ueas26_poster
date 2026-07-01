@@ -10,3 +10,9 @@ This is the GitHub repository for the research project investigating the relativ
 Please contact Tiffany Paalman (tiffany.paalman@duke.edu) with questions and/or feedback!
 
 Learn more about Tiffany's research here: https://linktr.ee/tpaalman01
+
+### Repository structure: 
+- */data* contains all raw and processed data from experimental monitoring efforts using UAV imagery and field-collected data. 
+- */code* contains code for statistical analysis and figures presenting in the poster to assess preliminary experimental treatment effects of degree of degradation - and ray foraging distrubance on oyster reef recovery
+- */docs* contains .pdf and .png files of the poster, including a citations list with a .pdf file of each referenced paper
+- */figs* contains .png files of the figures presented on the poster
