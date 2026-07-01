@@ -1,0 +1,651 @@
+---
+title: "grc-ueas26-poster"
+author: "Tiffany Paalman"
+date: 07/01/2026
+toc: true
+format: 
+  revealjs: default
+  html:
+    df-print: paged
+    code-fold: true
+    code-tools: true
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## GRC: Unifying Ecology Across Scales Poster
+
+July 11 - 17, 2026
+
+Stonehill College, Easton, MA
+
+#### Pits & Pieces: Investigating the relative effects of habitat degradation and food web alteration on ecosystem structure, function, and recovery
+
+#### Abstract:
+
+It is well established that habitat degradation and food web alteration can individually drive loss of ecosystem structure and function. How these two forces can interact has received less attention. Theory predicts that loss of habitat can decrease top-down forcing in a system if the range of keystone consumers is limited to that habitat and increase it if the consumers are highly mobile with a range well beyond the area of degraded ecosystem. Experimental tests of this theory are uncommon. We experimentally tested the latter prediction in oyster reef systems, which have experienced widespread anthropogenic degradation over the past century. Concomitant with this degradation has been overlapping food web alteration in the wider seascape, with loss of top predators potentially leading to increases in mesopredator ray populations. Rays forage around and within reef systems, excavating adjacent sediments in search of invertebrates to create “pits”. These feeding disturbances can dislodge and bury oysters on the edge of patches – an effect that should increase within increasing edge to area ratio of a degraded reef. We expect that the suppression of oyster recovery is increased synergistically by a high degree of habitat degradation and high ray foraging activity. Here, I present preliminary data combining experimental manipulations of ray foraging and degree of degradation and combining regional surveys using UAS imagery across a 10-year time scale to investigate 1) how oyster reef structural characteristics vary with ray foraging intensities over time and 2) the relative effect of ray foraging and oyster cover (as a proxy for degradation) on oyster reef recovery, structure, and function.
+
+## Experimental Data Analysis
+
+### Data Loading & Tidying
+
+```{r}
+#| label: load-packages
+#| include: false
+#| message: false
+
+library(tidyverse)
+library(ggplot2)
+library(car)
+library(broom)
+library(patchwork)
+library(here)
+library(readxl)
+library(performance)
+library(glmmTMB)
+library(dplyr)
+```
+
+```{r}
+#| label: load-spring2026-data
+#| include: false
+#| message: false
+
+spr26_d_oys <- read_excel(here::here("data", "raw", "20260516_imagery_data_analysis", "c20260516_oys_data.xlsx"))
+spr26_d_pits <- read_excel(here::here("data", "raw", "20260516_imagery_data_analysis", "c20260516_pits_data.xlsx"))
+spr26_f_oys <- read_excel(here::here("data", "processed", "spr26_field_oyster.xlsx"))
+spr26_f_reef <- read_excel(here::here("data", "processed", "spr26_field_reef.xlsx"))
+treatments <- read_excel(here::here("data", "processed", "treatments.xlsx"))
+
+glimpse(spr26_d_oys)
+glimpse(spr26_d_pits)
+glimpse(spr26_f_oys)
+glimpse(spr26_f_reef)
+glimpse(treatments)
+```
+
+```{r}
+#| label: clean-drone-data
+#| include: false
+#| message: false
+
+#clean drone oyster data
+spr26_d_oys <- spr26_d_oys %>%
+  dplyr::select(
+    plot = `c20260516_oys_data.plot`,
+    oys_area = `c20260516_oys_data.SUM_oys_area`,
+    oys_perimeter = `c20260516_oys_data.SUM_oys_perim`,
+    treated_oys_perc_cover = `c20260516_oys_data.treated_oys_perc_cover`,
+    treatment = `20260516_plotpolygon.treatment`,
+    plot_area = `20260516_plotpolygon.plot_area`
+  ) %>%
+  mutate(plot = as.numeric(plot))
+
+#clean drone pit data
+spr26_d_pits <- spr26_d_pits %>%
+  dplyr::select(
+    plot = `c20260516_pits_data.plot`,
+    pit_area = `c20260516_pits_data.SUM_pit_area`,
+    pit_count = `c20260516_pits_data.COUNT_pit_area`,
+    pit_cover_percent = `c20260516_pits_data.pit_cover_perc`,
+    treatment = `20260516_plotpolygon.treatment`
+  ) %>%
+  mutate(plot = as.numeric(plot))
+
+#parse treatment information (extract cover % and ray access)
+treatments <- treatments %>%
+  dplyr::mutate(
+    cover_level = as.factor(treatment__cover_percent),
+    ray_access = factor(ray_access, levels = c("caged", "control"))
+  ) %>%
+  dplyr::select(plot, cover_level, ray_access, treatment_long)
+
+#merge all plot level data
+exp_data <- spr26_d_oys %>%
+  full_join(spr26_d_pits, by = c("plot", "treatment")) %>%
+  left_join(treatments, by = "plot") %>%
+  dplyr::select(plot, cover_level, ray_access, everything())
+
+#write csv
+write.csv(exp_data, "~/Library/CloudStorage/OneDrive-Personal/projects/github/grc-ueas26-poster/data/processed/exp_data.csv")
+
+#remove duplicates
+exp_data <- read_csv(here::here("data", "processed", "exp_data.csv")) %>%
+  distinct(plot, .keep_all = TRUE)
+
+# verify
+nrow(exp_data)  # Should be 64
+n_distinct(exp_data$plot)  # Should be 64
+
+#check for missing data
+print(colSums(is.na(exp_data)))
+
+print(head(exp_data, 10))
+```
+
+```{r}
+#| label: load-sum25-data
+#| include: false
+#| message: false
+
+sum25_f_oys <- read_excel(here::here("data", "processed", "sum25_field_oyster.xlsx"))
+sum25_f_reef <- read_excel(here::here("data", "processed", "sum25_field_reef_structure.xlsx"))
+```
+
+```{r}
+#| label: clean-field-data
+#| include: false
+#| message: false
+
+#2025 data
+sum25_f_oys <- sum25_f_oys %>%
+  dplyr::filter(!is.na(live_oyster_count) & !is.na(dead_oyster_count)) %>%
+  dplyr::select(
+    plot,
+    live_count_initial = live_oyster_count,
+    dead_count_initial = dead_oyster_count,
+    spat_count_initial = spat_count,
+    starts_with("oyster_length")
+  ) %>%
+  dplyr::mutate(plot = as.numeric(plot),
+                across(starts_with("oyster_length"), as.numeric)) %>%
+  group_by(plot) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(
+    total_oyster_initial = live_count_initial + dead_count_initial,
+    percent_live_initial = (live_count_initial / total_oyster_initial) * 100
+  ) %>%
+  rowwise() %>%
+  mutate(
+    mean_oyster_length_initial = mean(c_across(starts_with("oyster_length")), na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  dplyr::select(plot, live_count_initial, dead_count_initial, spat_count_initial, 
+                percent_live_initial, mean_oyster_length_initial)
+
+sum25_f_reef <- sum25_f_reef %>%
+  dplyr::select(
+    plot,
+    clump_count,
+    perc_cover,
+    highest_height_cm,
+    random_height_1_cm,
+    random_height_2_cm,
+    random_height_3_cm
+  ) %>%
+  dplyr::mutate(
+    plot = as.numeric(plot),
+    mean_height = rowMeans(dplyr::select(., ends_with("_cm")), na.rm = TRUE)
+  ) %>%
+  group_by(plot) %>%
+  summarise(
+    mean_clump_count_initial = mean(clump_count, na.rm = TRUE),
+    mean_perc_cover_initial = mean(perc_cover, na.rm = TRUE),
+    mean_height_initial = mean(mean_height, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+
+#2026 data
+spr26_f_oys <- spr26_f_oys %>%
+  #filter out rows with missing live/dead counts
+  dplyr::filter(!is.na(live_oyster_count) & !is.na(dead_oyster_count)) %>%
+  dplyr::select(
+    plot,
+    quad,
+    live_count = live_oyster_count,
+    dead_count = dead_oyster_count,
+    spat_count = spat_count,
+    starts_with("oyster_length")
+  ) %>%
+  mutate(plot = as.numeric(plot)) %>%
+  #group by plot and take the first non-NA record per plot
+  group_by(plot) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(
+    total_oyster_count = live_count + dead_count,
+    percent_live = (live_count / total_oyster_count) * 100
+  ) %>%
+  mutate(
+    mean_oyster_length = rowMeans(
+      dplyr::select(., starts_with("oyster_length")), na.rm = TRUE
+    )
+  ) %>%
+  dplyr::select(plot, live_count, dead_count, spat_count, percent_live, mean_oyster_length)
+
+spr26_f_reef <- spr26_f_reef %>%
+  dplyr::select(
+    plot,
+    quad,
+    clump_count,
+    perc_cover,
+    highest_height_cm,
+    random_height_1_cm,
+    random_height_2_cm,
+    random_height_3_cm
+  ) %>%
+  mutate(
+    plot = as.numeric(plot),
+    mean_height = rowMeans(
+      dplyr::select(., ends_with("_cm")), na.rm = TRUE
+    )
+  ) %>%
+  group_by(plot) %>%
+  summarise(
+    mean_clump_count = mean(clump_count, na.rm = TRUE),
+    mean_perc_cover = mean(perc_cover, na.rm = TRUE),
+    mean_highest_height = mean(highest_height_cm, na.rm = TRUE),
+    mean_height_all = mean(mean_height, na.rm = TRUE),
+    .groups = 'drop'
+  )
+```
+
+```{r}
+#| label: join-data
+#| include: false
+#| message: false
+
+#join field data to experiment data with summer 2025 baseline
+exp_data_full <- exp_data %>%
+  left_join(spr26_f_reef, by = "plot") %>%
+  left_join(spr26_f_oys, by = "plot") %>%
+  # Join initial baseline data (July 2025)
+  left_join(sum25_f_reef, by = "plot") %>%
+  left_join(sum25_f_oys, by = "plot")
+
+#screen for duplicates
+duplicate_count <- exp_data_full %>%
+  group_by(plot) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  filter(n > 1)
+
+#remove duplicates and add change variables
+exp_data_full <- exp_data_full %>%
+  distinct(plot, .keep_all = TRUE) %>%
+  #change over time(delta)
+  mutate(
+    delta_live_oysters = live_count - live_count_initial,
+    delta_dead_oysters = dead_count - dead_count_initial,
+    delta_spat = spat_count - spat_count_initial,
+    delta_percent_live = percent_live - percent_live_initial,
+    delta_reef_height = mean_height_all - mean_height_initial,
+    delta_clump_count = mean_clump_count - mean_clump_count_initial,
+    initial_cover_level = as.numeric(as.character(cover_level)),
+    delta_oyster_cover = treated_oys_perc_cover - initial_cover_level,
+    whole_oys_perc_cover = (oys_area / plot_area) * 100,
+    pit_count = replace_na(pit_count, 0),
+    pit_cover_percent = replace_na(pit_cover_percent, 0)
+  )
+```
+
+### Summary statistics for UAV imagery
+
+```{r}
+#| label: spr26-drone-summary-stats
+
+oyster_summary <- exp_data_full %>%
+  group_by(cover_level, ray_access) %>%
+  summarise(
+    n = n(),
+    mean_cover = mean(treated_oys_perc_cover, na.rm = TRUE),
+    sd_cover = sd(treated_oys_perc_cover, na.rm = TRUE),
+    se_cover = sd_cover / sqrt(n),
+    .groups = 'drop'
+  ) %>%
+  arrange(cover_level, ray_access)
+print(oyster_summary)
+
+pit_summary <- exp_data_full %>%
+  group_by(cover_level, ray_access) %>%
+  mutate(
+    pit_count = replace_na(pit_count, 0),
+    pit_cover_percent = replace_na(pit_cover_percent, 0)
+  ) %>% 
+  summarise(
+    n = n(),
+    mean_pit_count = mean(pit_count, na.rm = TRUE),
+    sd_pit_count = sd(pit_count, na.rm = TRUE),
+    se_pit_count = sd_pit_count / sqrt(n),
+    mean_pit_cover = mean(pit_cover_percent, na.rm = TRUE),
+    sd_pit_cover = sd(pit_cover_percent, na.rm = TRUE),
+    se_pit_cover = sd_pit_cover / sqrt(n),
+    .groups = 'drop'
+  )
+print(pit_summary)
+```
+
+### Summary statistics for field data
+
+```{r}
+#| label: spr26-field-summary
+
+field_summary <- exp_data_full %>%
+  group_by(cover_level, ray_access) %>%
+  summarise(
+    mean_live_oysters = mean(live_count, na.rm = TRUE),
+    se_live_oysters = sd(live_count, na.rm = TRUE) / sqrt(n()),
+    mean_dead_oysters = mean(dead_count, na.rm = TRUE),
+    se_dead_oysters = sd(dead_count, na.rm = TRUE) / sqrt(n()),
+    mean_spat = mean(spat_count, na.rm = TRUE),
+    se_spat = sd(spat_count, na.rm = TRUE) / sqrt(n()),
+    mean_clump = mean(mean_clump_count, na.rm = TRUE),
+    se_clump = sd(mean_clump_count, na.rm = TRUE) / sqrt(n()),
+    mean_reef_height = mean(mean_height_all, na.rm = TRUE),
+    se_reef_height = sd(mean_height_all, na.rm = TRUE) / sqrt(n()),
+    .groups = 'drop'
+  )
+print(field_summary)
+```
+
+### Statistics + Figures
+
+```{r}
+{r}
+#| label: fig-themes
+#| include: false
+#| message: false
+
+theme_set(theme_bw(base_size = 12) +
+            theme(
+              panel.grid.minor = element_blank(),
+              legend.position = "bottom",
+              plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+              strip.text = element_text(face = "bold")
+            ))
+```
+
+```{r}
+#| label: final-oyster-fig
+
+# oyster change cover anova
+anova_recovery <- aov(delta_oyster_cover ~ cover_level * ray_access, data = exp_data_full)
+print(summary(anova_recovery))
+
+#check assumptions
+plot(anova_recovery)
+
+
+# figure colors
+colors_treatment <- c(
+  "25-Exclusion"    = "#A8D5E2",
+  "25-Open"     = "#007A87",
+  "50-Exclusion"    = "#CFE39A",
+  "50-Open"     = "#6B8E23",
+  "75-Exclusion"    = "#F4B39D",
+  "75-Open"     = "#D24A33",
+  "100-Exclusion"   = "#D4C2F0",
+  "100-Open"    = "#5A3E99"
+)
+
+# prep data
+cover_change_summary <- exp_data_full %>%
+  group_by(cover_level, ray_access) %>%
+  summarise(
+    n = n(),
+    mean_change = mean(delta_oyster_cover, na.rm = TRUE),
+    sd_change = sd(delta_oyster_cover, na.rm = TRUE),
+    se_change = sd_change / sqrt(n),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    ray_type = factor(ifelse(ray_access == "caged", "Exclusion", "Open"),
+                      levels = c("Exclusion", "Open")),
+    cover_level = factor(
+      cover_level,
+      levels = c("25", "50", "75", "100")
+    ),
+    color_key = paste0(cover_level, "-", ray_type)
+  )
+
+# plot
+cover_change_fig <- ggplot(
+  cover_change_summary,
+  aes(x = ray_type, y = mean_change, fill = color_key)
+) +
+  geom_col(color = "black", width = 0.6, linewidth = 0.8) +
+  geom_errorbar(
+    aes(ymin = mean_change - se_change, ymax = mean_change + se_change),
+    width = 0.3, 
+    color = "black", 
+    linewidth = 0.9
+  ) +
+  geom_hline(
+    yintercept = 0, 
+    linetype = "dashed", 
+    color = "gray60", 
+    linewidth = 0.7
+  ) +
+  facet_wrap(
+    ~ cover_level, 
+    nrow = 1,
+    labeller = labeller(
+      cover_level = c(
+        "25" = "Initial 25% Cover",
+        "50" = "Initial 50% Cover",
+        "75" = "Initial 75% Cover",
+        "100" = "Initial 100% Cover"
+      )
+    )
+  ) +
+  labs(
+    x = "",
+    y = "Absolute Change in Oyster Cover (%)"
+  ) +
+  scale_fill_manual(values = colors_treatment) +
+  scale_y_continuous(breaks = seq(-15, 10, 5)) +
+  theme_classic(base_size = 26) +
+  theme(
+    axis.title.y = element_text(
+      size = 32,
+      face = "bold",
+      margin = margin(r = 20)
+    ),
+    axis.text.x = element_text(size = 24, color = "black"),
+    axis.text.y = element_text(size = 24, color = "black"),
+    strip.text = element_text(size = 24, face = "plain", color = "black"),
+    strip.background = element_blank(),
+    panel.spacing = unit(2, "cm"),
+    plot.margin = margin(20, 20, 20, 40),
+    legend.position = "none"
+  )
+
+# check fig
+print(cover_change_fig)
+
+# save
+ggsave(
+  filename = file.path("figs", "oyster_cover_change_fig.png"),
+  plot = cover_change_fig,
+  width = 17,
+  height = 9,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+ggsave(
+  filename = file.path("figs","oyster_cover_change_fig.pdf"),
+  plot = cover_change_fig,
+  width = 17,
+  height = 9,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+```
+
+```{r}
+#| label: pit-count-figs
+
+# prep data
+pit_data <- exp_data_full %>%
+  mutate(
+    pit_count = replace_na(pit_count, 0),
+    pit_cover_percent = replace_na(pit_cover_percent, 0),
+    cover_level = factor(cover_level, levels = c("25", "50", "75", "100"))
+  ) %>%
+  filter(ray_access == "control")
+
+summary(pit_data$pit_count)
+table(pit_data$pit_count)
+mean(pit_data$pit_count)
+var(pit_data$pit_count)
+
+# distribution 
+ggplot(pit_data, aes(x = pit_count)) +
+  geom_histogram(
+    binwidth = 1,
+    boundary = -0.5,
+    color = "black",
+    fill = "gray80"
+  ) +
+  labs(
+    x = "Number of Pits",
+    y = "Frequency"
+  ) +
+  theme_classic()
+
+### MAY 26 PIT COUNT BASED ON INITIAL TREATMENT ###
+# poisson glm
+pit_count_glm <- glm(
+  pit_count ~ cover_level,
+  family = poisson,
+  data = pit_data
+)
+dispersion <-
+  sum(residuals(pit_count_glm, type = "pearson")^2) /
+  df.residual(pit_count_glm)
+dispersion
+
+summary(pit_count_glm)
+car::Anova(pit_count_glm, type = 2, test.statistic = "LR")
+
+# summary stats
+control_pits_summary <- pit_data %>%
+  mutate(
+    cover_level = factor(as.character(cover_level), levels = c("25", "50", "75", "100"))
+  ) %>%
+  group_by(cover_level) %>%
+  summarise(
+    n = n(),
+    mean_pit_count = mean(pit_count, na.rm = TRUE),
+    sd_pit_count = sd(pit_count, na.rm = TRUE),
+    se_pit_count = sd_pit_count / sqrt(n),
+    .groups = "drop"
+  )
+
+#fig colors
+colors_pit <- c(
+  "25" = "#007A87",
+  "50" = "#6B8E23",
+  "75" = "#D24A33",
+  "100" = "#5A3E99"
+)
+
+#fig
+pit_count_bar_fig <- ggplot(
+  control_pits_summary,
+  aes(x = cover_level, y = mean_pit_count, fill = cover_level)
+) +
+  geom_col(color = "black", linewidth = 0.8, width = 0.6) +
+  geom_errorbar(
+    aes(
+      ymin = mean_pit_count - se_pit_count,
+      ymax = mean_pit_count + se_pit_count
+    ),
+    width = 0.3,
+    linewidth = 0.9
+  ) +
+  geom_jitter(
+    data = pit_data,
+    aes(x = cover_level, y = pit_count),
+    inherit.aes = FALSE,
+    width = 0.12,
+    height = 0,
+    size = 3.5,
+    alpha = 0.6
+  ) +
+  labs(
+    x = "Initial Oyster Cover (%)",
+    y = "Number of Pits"
+  ) +
+  scale_y_continuous(limits = c(0, 10), breaks = seq(0, 10, 2)) +
+  scale_fill_manual(values = colors_pit) +
+  theme_classic(base_size = 24) +
+  theme(
+    axis.title = element_text(size = 32, face = "bold"),
+    axis.text = element_text(size = 24, color = "black"),
+    plot.margin = margin(20, 20, 20, 40),
+    legend.position = "none"
+  )
+
+pit_count_bar_fig
+
+#save
+ggsave(
+  filename = file.path("figs", "pit_count_bar_fig.png"),
+  plot = pit_count_bar_fig,
+  width = 8,
+  height = 9,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+#### MAY 26 OYS COVER + PIT COUNT LM ####
+
+#linear model without initial cover level 
+pit_count_lm <- lm(whole_oys_perc_cover ~ pit_count, data = pit_data)
+summary(pit_count_lm)
+anova(pit_count_lm)
+
+### figure with pit_count_lm
+pit_count_lm_fig <- ggplot(
+  pit_data,
+  aes(x = pit_count, y = whole_oys_perc_cover)
+) +
+  geom_point(
+    shape = 21,
+    size = 5.5,
+    stroke = 1,
+    color = "black",
+    fill = "#e6b422",
+    alpha = 0.6
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = TRUE,
+    color = "black",
+    linewidth = 1.5,
+    fill = "gray80"
+  ) +
+  labs(
+    x = "Number of Pits",
+    y = "Total Oyster Cover (%)"
+  ) +
+  scale_x_continuous(breaks = seq(0, 9, 1)) +
+  scale_y_continuous(breaks = seq(0, 60, 10)) +
+  coord_cartesian(xlim = c(0, 9), ylim = c(0, 60)) +
+  theme_classic(base_size = 20) +
+  theme(
+    axis.title = element_text(size = 32, face = "bold"),
+    axis.text = element_text(size = 24, color = "black"),
+    plot.margin = margin(12, 12, 12, 12)
+  )
+
+print(pit_count_lm_fig)
+
+ggsave(
+  filename = file.path("figs", "pit_count_lm_fig.png"),
+  plot = pit_count_lm_fig,
+  width = 8,
+  height = 9,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+```
