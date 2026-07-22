@@ -277,7 +277,8 @@ exp_data_full <- exp_data_full %>%
     delta_oyster_cover = treated_oys_perc_cover - initial_cover_level,
     whole_oys_perc_cover = (oys_area / plot_area) * 100,
     pit_count = replace_na(pit_count, 0),
-    pit_cover_percent = replace_na(pit_cover_percent, 0)
+    pit_cover_percent = replace_na(pit_cover_percent, 0),
+    relative_delta_oyster_cover = delta_oyster_cover / initial_cover_level
   )
 ```
 
@@ -345,7 +346,6 @@ print(field_summary)
 #### Oyster Cover Change
 
 ```{r}
-{r}
 #| label: fig-themes
 #| include: false
 #| message: false
@@ -647,6 +647,131 @@ ggsave(
   filename = file.path("figs", "pit_count_lm_fig.png"),
   plot = pit_count_lm_fig,
   width = 8,
+  height = 9,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+```
+
+##### Feedback after conference: 
+
+#### Relative Oyster Cover Change
+
+```{r}
+{r}
+#| label: relative-change-oyster-fig
+
+# oyster change cover anova
+anova_recovery <- aov(relative_delta_oyster_cover ~ cover_level * ray_access, data = exp_data_full)
+print(summary(anova_recovery))
+
+#check assumptions
+plot(anova_recovery)
+
+
+# figure colors
+colors_treatment <- c(
+  "25-Exclusion"    = "#A8D5E2",
+  "25-Open"     = "#007A87",
+  "50-Exclusion"    = "#CFE39A",
+  "50-Open"     = "#6B8E23",
+  "75-Exclusion"    = "#F4B39D",
+  "75-Open"     = "#D24A33",
+  "100-Exclusion"   = "#D4C2F0",
+  "100-Open"    = "#5A3E99"
+)
+
+# prep data
+cover_change_summary <- exp_data_full %>%
+  group_by(cover_level, ray_access) %>%
+  summarise(
+    n = n(),
+    mean_change = mean(relative_delta_oyster_cover, na.rm = TRUE),
+    sd_change = sd(relative_delta_oyster_cover, na.rm = TRUE),
+    se_change = sd_change / sqrt(n),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    ray_type = factor(ifelse(ray_access == "caged", "Exclusion", "Open"),
+                      levels = c("Exclusion", "Open")),
+    cover_level = factor(
+      cover_level,
+      levels = c("25", "50", "75", "100")
+    ),
+    color_key = paste0(cover_level, "-", ray_type)
+  )
+
+# plot
+cover_change_fig <- ggplot(
+  cover_change_summary,
+  aes(x = ray_type, y = mean_change, fill = color_key)
+) +
+  geom_col(color = "black", width = 0.6, linewidth = 0.8) +
+  geom_errorbar(
+    aes(ymin = mean_change - se_change, ymax = mean_change + se_change),
+    width = 0.3, 
+    color = "black", 
+    linewidth = 0.9
+  ) +
+  geom_hline(
+    yintercept = 0, 
+    linetype = "dashed", 
+    color = "gray60", 
+    linewidth = 0.7
+  ) +
+  facet_wrap(
+    ~ cover_level, 
+    nrow = 1,
+    labeller = labeller(
+      cover_level = c(
+        "25" = "Initial 25% Cover",
+        "50" = "Initial 50% Cover",
+        "75" = "Initial 75% Cover",
+        "100" = "Initial 100% Cover"
+      )
+    )
+  ) +
+  labs(
+    x = "",
+    y = "Relative Change in Oyster Cover (%)"
+  ) +
+  scale_fill_manual(values = colors_treatment) +
+  scale_y_continuous(breaks = seq(-15, 10, 5)) +
+  theme_classic(base_size = 26) +
+  theme(
+    axis.title.y = element_text(
+      size = 32,
+      face = "bold",
+      margin = margin(r = 20)
+    ),
+    axis.text.x = element_text(size = 24, color = "black"),
+    axis.text.y = element_text(size = 24, color = "black"),
+    strip.text = element_text(size = 24, face = "plain", color = "black"),
+    strip.background = element_blank(),
+    panel.spacing = unit(2, "cm"),
+    plot.margin = margin(20, 20, 20, 40),
+    legend.position = "none"
+  )
+
+# check fig
+print(cover_change_fig)
+
+# save
+ggsave(
+  filename = file.path("figs", "relative_oyster_cover_change_fig.png"),
+  plot = cover_change_fig,
+  width = 17,
+  height = 9,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+ggsave(
+  filename = file.path("figs","relative_oyster_cover_change_fig.pdf"),
+  plot = cover_change_fig,
+  width = 17,
   height = 9,
   units = "in",
   dpi = 300,
